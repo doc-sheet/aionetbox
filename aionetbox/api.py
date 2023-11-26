@@ -3,11 +3,10 @@ import re
 import json
 import asyncio
 import logging
-import collections
 
 from aionetbox.utils import singleton
 
-from typing import Iterable
+from collections.abc import Iterable, Mapping
 from urllib.parse import urlparse, parse_qsl
 
 import aiohttp
@@ -52,7 +51,8 @@ class AIONetbox:
             api_key: The API Token from Netbox to access Netbox API
             session: ClientSession for http requests
         """
-        spec = NetboxSpec('{}/api/swagger.json'.format(url))
+        url = url.rstrip('/')
+        spec = NetboxSpec(f'{url}/api/schema/')
 
         aionb = cls(url, api_key, private_key=private_key, spec=spec, session=session)
 
@@ -175,6 +175,7 @@ class AIONetbox:
         if isinstance(config, ResolvingParser):
             config = config.specification
 
+        config.setdefault('basePath','/')
         operations['_orig'] = config
         for path, data in config.get('paths', {}).items():
             for method in self._http_methods:
@@ -195,7 +196,7 @@ class AIONetbox:
 
                     rest_cfg = {
                         'url': path,
-                        'params': data.get('parameters', []),
+                        'params': payload.get('parameters', []),
                         'method': action,
                     }
 
@@ -224,9 +225,6 @@ class AIONetbox:
     async def close(self):
         """Close all open connections"""
         await self.session.close()
-
-    def __del__(self):
-        asyncio.ensure_future(self.session.close())
 
 
 class NetboxApi:
@@ -281,11 +279,12 @@ class NetboxApiOperation:
         self.config = config
         self.rest_config = self.config.get('rest', {})
         self.operation = operation
+        self.http_method = self.rest_config['method']
         self.tag = tag
 
     async def _request(self, path, query, body):
         url = self.build_url(self.rest_config.get('url')).format(**path)
-        method = self.rest_config.get('method')
+        method = self.http_method
         resp = await self.client.request(
             method=method,
             url=url,
@@ -293,8 +292,12 @@ class NetboxApiOperation:
             body=body
         )
 
-        if resp.status >= 400:
-            raise ClientFilterError(message=await resp.json())
+        if not resp.ok:
+            try:
+                msg = await resp.json()
+            except Exception:
+                msg = {'status': resp.status}
+            raise ClientFilterError(msg, resp.status, resp.request_info)
 
         if method.upper() == 'DELETE':
             # if we're here, it means raise_for_status is cool and we're doing a delete, so lets just return a bool
@@ -304,7 +307,7 @@ class NetboxApiOperation:
 
         return NetboxResponseObject.from_response(
             data=data,
-            **self.config.get('responses', {}).get(str(resp.status), {}).get('schema', {})
+            **self.config.get('responses', {}).get(str(resp.status), {}).get('content', {}).get(resp.content_type).get('schema', {})
         )
 
     async def request(self, **kwargs):
@@ -314,15 +317,6 @@ class NetboxApiOperation:
             self.client.session_key = await self.client.get_session_key(self.client.private_key)
 
         path, body, query = self.parse_params(kwargs)
-
-        if self.operation_method == 'list':
-            # netbox has terrible swagger spec generation and leaves out custom fields (cf)
-            keys_used = set(list(body.keys()) + list(query.keys()) + list(path.keys()))
-            remaining_vars = set(kwargs.keys()) - keys_used
-
-            for kw in remaining_vars:
-                if kw.startswith('cf_'):
-                    query[kw] = kwargs.get(kw)
 
         output = await self._request(path, query, body)
 
@@ -350,7 +344,7 @@ class NetboxApiOperation:
             'path': {},
         }
 
-        spec_parameters = self.config.get('parameters', []) + self.rest_config.get('params', [])
+        spec_parameters = self.rest_config.get('params', [])
         for sp in spec_parameters:
             if sp['name'] not in params and sp['required']:
                 raise MissingRequiredParam('{} is a required parameter'.format(sp['name']))
@@ -399,7 +393,9 @@ class NetboxResponseObject:
     def from_response(cls, data, **kwargs):
 
         if 'type' not in kwargs:
-            raise AttributeError('type is a required parameter')
+            keys = data.keys()
+            description = kwargs.get('description', 'unknown')
+            raise AttributeError(f'type is a required parameter ({description=} / {keys=})')
 
         output = cls()
         if kwargs['type'] != 'object':
@@ -410,7 +406,7 @@ class NetboxResponseObject:
 
         for req in required:
             # Check for all required response parameters
-            if req not in data:
+            if req not in properties:
                 raise InvalidResponse('Response did not include required "{}"'.format(req))
 
         # if type == 'array':
@@ -423,7 +419,7 @@ class NetboxResponseObject:
             value = val
 
             if ctype == 'object':
-                if isinstance(val, collections.Mapping):
+                if isinstance(val, Mapping):
                     value = cls.from_response(data=val, **spec)
             elif ctype == 'array':
                 # If we have an array of objects, make sure the value is iterable, then produce a list of objects
@@ -442,7 +438,7 @@ class NetboxResponseObject:
         if isinstance(obj, NetboxResponseObject):
             return obj.dict()
 
-        if isinstance(obj, collections.Mapping):
+        if isinstance(obj, Mapping):
             return {k: NetboxResponseObject._obj(v) for k, v in obj.items()}
 
         if isinstance(obj, list):
