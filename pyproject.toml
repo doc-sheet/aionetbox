@@ -14,13 +14,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
-
 ]
 
 [tool.poetry.dependencies]
 python = "^3.10"
 aiohttp = {extras = ["speedups"], version = "^3.9.1"}
 prance = {extras = ["osv"], version = "^23.6"}
+pyyaml = "^6.0.1"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.7.1"
@@ -51,3 +51,6 @@ line-length = 120
 
 [tool.ruff.format]
 quote-style = "single"
+
+[tool.mypy]
+ignore_missing_imports = true
