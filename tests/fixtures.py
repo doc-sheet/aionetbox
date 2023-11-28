@@ -1,15 +1,16 @@
-import asynctest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock
 
 
 class ResponseMock():
 
-    json = asynctest.CoroutineMock(return_value={})
-    raise_for_status = asynctest.CoroutineMock()
+    json = AsyncMock(return_value={})
+    raise_for_status = AsyncMock()
     status = 200
+    ok = True
+    content_type = '*/*'
 
 
-class SessionMock(MagicMock):
+class SessionMock(AsyncMock):
 
-    request = asynctest.CoroutineMock(return_value=ResponseMock())
-    close = asynctest.CoroutineMock()
+    request = AsyncMock(return_value=ResponseMock())
+    close = AsyncMock()

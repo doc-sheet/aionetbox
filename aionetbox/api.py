@@ -7,7 +7,7 @@ import logging
 from aionetbox.utils import singleton
 
 from collections.abc import Iterable, Mapping
-from urllib.parse import urlparse, parse_qsl
+from urllib.parse import urlsplit, parse_qsl
 
 import aiohttp
 from prance import ResolvingParser
@@ -69,7 +69,7 @@ class AIONetbox:
         """
         data = NetboxSpec(spec)
 
-        url = '{}://{}'.format(data.specification.get('schemes', ['http'])[0], data.specification.get('host'))
+        url = urlsplit(data.specification['servers'][0]['url'])._replace(path='').geturl()
         aionb = cls(url, api_key, private_key=private_key, spec=data, session=session)
 
         return aionb
@@ -85,7 +85,7 @@ class AIONetbox:
         self.loop = loop or asyncio.get_event_loop()
 
     async def get_session_key(self, private_key):
-        url = '{}{}{}'.format(self.host, self.config.get('_orig', {}).get('basePath'), '/secrets/get-session-key/')
+        url = '{}{}{}'.format(self.host, self.config.get('_orig', {})['basePath'], '/secrets/get-session-key/')
         resp = await self.request(
             url=url,
             method='post',
@@ -175,7 +175,8 @@ class AIONetbox:
         if isinstance(config, ResolvingParser):
             config = config.specification
 
-        config.setdefault('basePath','/')
+        base_uri = urlsplit(config['servers'][0]['url']).path or '/'
+        config.setdefault('basePath', base_uri)
         operations['_orig'] = config
         for path, data in config.get('paths', {}).items():
             for method in self._http_methods:
@@ -196,7 +197,8 @@ class AIONetbox:
 
                     rest_cfg = {
                         'url': path,
-                        'params': payload.get('parameters', []),
+                        'parameters': payload.get('parameters', []),
+                        'requestBody': payload.get('requestBody'),
                         'method': action,
                     }
 
@@ -281,6 +283,7 @@ class NetboxApiOperation:
         self.operation = operation
         self.http_method = self.rest_config['method']
         self.tag = tag
+        print('config',config)
 
     async def _request(self, path, query, body):
         url = self.build_url(self.rest_config.get('url')).format(**path)
@@ -324,7 +327,7 @@ class NetboxApiOperation:
             return output
 
         while output.next:
-            u = urlparse(output.next)
+            u = urlsplit(output.next)
             pagination_output = await self._request(path, {**query, **dict(parse_qsl(u.query))}, body)
 
             output.results.extend(pagination_output.results)
@@ -344,21 +347,21 @@ class NetboxApiOperation:
             'path': {},
         }
 
-        spec_parameters = self.rest_config.get('params', [])
+        spec_parameters = self.rest_config.get('parameters', [])
+
+        if params.get('body') and self.rest_config.get('requestBody'):
+            qb['body'] = params['body']
+
         for sp in spec_parameters:
-            if sp['name'] not in params and sp['required']:
+            if sp['name'] not in params and sp.get('required'):
                 raise MissingRequiredParam('{} is a required parameter'.format(sp['name']))
 
             if sp['name'] not in params:
                 continue
 
-            if sp['in'] == 'body':
-                # BODY params are special in that the name is not passed through
-                qb[sp['in']] = params.get(sp['name'])
-            else:
-                qb[sp['in']][sp['name']] = params.get(sp['name'])
+            qb[sp['in']][sp['name']] = params.get(sp['name'])
 
-        return (qb.get('path'), qb.get('body'), qb.get('query'))
+        return (qb['path'], qb['body'], qb['query'])
 
     @property
     def operation_method(self):
@@ -406,7 +409,7 @@ class NetboxResponseObject:
 
         for req in required:
             # Check for all required response parameters
-            if req not in properties:
+            if req not in data:
                 raise InvalidResponse('Response did not include required "{}"'.format(req))
 
         # if type == 'array':
