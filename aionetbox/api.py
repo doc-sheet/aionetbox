@@ -40,7 +40,7 @@ class AIONetbox:
     """
 
     _http_methods = ('GET', 'HEAD', 'DELETE', 'POST', 'PUT', 'PATCH', 'OPTIONS')
-    _api_cache = {}
+    _api_cache: dict[str, "NetboxApi"] = {}
 
     @classmethod
     def from_openapi(cls, url, api_key, private_key=None, session=None):
