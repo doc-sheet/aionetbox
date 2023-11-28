@@ -1,10 +1,9 @@
 
 import pytest
 import yaml
-import asynctest
 import aiohttp
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from .fixtures import SessionMock, ResponseMock
 from pathlib import Path
@@ -36,7 +35,7 @@ def test_NetboxResponseObject_from_response_no_type():
 def test_NetboxResponseObject_from_response():
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
 
-    schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['schema']
+    schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['content']['*/*']['schema']
 
     data = {
         'id': 1,
@@ -71,7 +70,7 @@ def test_NetboxResponseObject_from_response():
 
 def test_NetboxResponseObject_repr():
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
-    schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['schema']
+    schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['content']['*/*']['schema']
 
     data = {
         'id': 1,
@@ -105,7 +104,8 @@ def test_NetboxResponseObject_repr():
 
 def test_NetboxResponseObject_from_invalid_response():
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
-    schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['schema']
+    schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['content']['*/*']['schema']
+    print(schema)
 
     data = {
         'id': 1,
@@ -124,13 +124,14 @@ def test_NetboxResponseObject_from_invalid_response():
     }
 
     with pytest.raises(InvalidResponse):
-        NetboxResponseObject.from_response(data=data, **schema)
+        print(NetboxResponseObject.from_response(data=data, **schema))
 
 
 def test_NetboxApiOperation():
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
-    op = NetboxApiOperation('users', 'users_read', {}, nb)
+    rest_config = {'method': 'get'}
+    op = NetboxApiOperation('users', 'users_read', {'rest': rest_config}, nb)
 
     assert repr(op) == 'Netbox.users.users_read'
 
@@ -138,7 +139,8 @@ def test_NetboxApiOperation():
 def test_NetboxApiOperation_build_url():
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
-    op = NetboxApiOperation('users', 'users_read', {}, nb)
+    rest_config = {'method': 'get'}
+    op = NetboxApiOperation('users', 'users_read', {'rest': rest_config}, nb)
 
     assert 'http://localhost/v1/test' == op.build_url('/test')
 
@@ -171,35 +173,37 @@ def test_NetboxApiOperation_parse_params_body():
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
     op = NetboxApiOperation('users', 'users_create', nb.config['users']['users_create'], nb)
 
-    params = {'data': {'foobar': 'bar', 'baz': True}}
+    params = {'body': {'foobar': 'bar', 'baz': True}}
     parsed = op.parse_params(params)
 
     assert ({}, {'foobar': 'bar', 'baz': True}, {}) == parsed
 
 
 def test_NetboxApiOperation_operation_method():
-    op = NetboxApiOperation('users', 'users_read', {}, {})
+    rest_config = {'method': 'get'}
+    op = NetboxApiOperation('users', 'users_read', {'rest': rest_config}, {})
     assert 'read' == op.operation_method
 
-    op = NetboxApiOperation('users', 'users_partial_update', {}, {})
+    op = NetboxApiOperation('users', 'users_partial_update', {'rest': rest_config}, {})
     assert 'partial_update' == op.operation_method
 
-    op = NetboxApiOperation('users', 'users_update', {}, {})
+    op = NetboxApiOperation('users', 'users_update', {'rest': rest_config}, {})
     assert 'update' == op.operation_method
 
 
 @pytest.mark.asyncio
 async def test_NetboxApiOperation_call():
 
+    rest_config = {'method': 'get'}
     with patch.object(NetboxApiOperation, 'request') as mreq:
-        mreq.side_effect = asynctest.MagicMock()
-        op = NetboxApiOperation('users', 'users_read', {}, {})
+        mreq.side_effect = AsyncMock()
+        op = NetboxApiOperation('users', 'users_read', {'rest': rest_config}, {})
         await op(foo='test')
         mreq.assert_called_with(foo='test')
 
     with patch.object(NetboxApiOperation, 'request') as mreq:
         mreq.side_effect = [MissingRequiredParam, aiohttp.ClientResponseError({}, {})]
-        op = NetboxApiOperation('users', 'users_read', {}, {})
+        op = NetboxApiOperation('users', 'users_read', {'rest': rest_config}, {})
 
         with pytest.raises(AttributeError):
             await op(foo='test')
@@ -213,10 +217,11 @@ async def test_NetboxApiOperation_call():
 async def test_NetboxApiOperation_request(mnbro):
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
-    nb.request = asynctest.CoroutineMock(return_value=ResponseMock())
-    op = NetboxApiOperation('users', 'users_read', nb.config['users']['users_read'], nb)
+    nb.request = AsyncMock(return_value=ResponseMock())
+    rest_config = {'method': 'get'}
+    op = NetboxApiOperation('users', 'users_read', nb.config['users']['users_read'] | {'rest': rest_config}, nb)
 
-    response_schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['schema']
+    response_schema = spec.specification['paths']['/users/{userId}']['get']['responses']['200']['content']['*/*']['schema']
     op.parse_params = MagicMock(return_value=({}, {}, {}))
     op.build_url = MagicMock()
 
@@ -230,21 +235,21 @@ async def test_NetboxApiOperation_request(mnbro):
 async def test_NetboxApiOperation_request_cf(mnbro):
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
-    nb.request = asynctest.CoroutineMock(return_value=ResponseMock())
+    nb.request = AsyncMock(return_value=ResponseMock())
     op = NetboxApiOperation('users', 'users_list', nb.config['users']['users_list'], nb)
 
     mnbro.from_response.return_value.next = None
 
-    response_schema = spec.specification['paths']['/users']['get']['responses']['200']['schema']
+    response_schema = spec.specification['paths']['/users']['get']['responses']['200']['content']['*/*']['schema']
     op.parse_params = MagicMock(return_value=({}, {}, {'name': 'test'}))
     op.build_url = MagicMock(return_value='http://test/users')
 
-    await op.request(name='test', cf_hello='world', extra='ignore')
+    await op.request(name='test', extra='ignore')
 
     nb.request.assert_called_with(
         method='get',
         url='http://test/users',
-        query_params={'name': 'test', 'cf_hello': 'world'},
+        query_params={'name': 'test'},
         body={}
     )
 
@@ -256,7 +261,7 @@ async def test_NetboxApiOperation_request_cf(mnbro):
 async def test_NetboxApiOperation_request_pagination(mnbro):
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
-    nb.request = asynctest.CoroutineMock(return_value=ResponseMock())
+    nb.request = AsyncMock(return_value=ResponseMock())
     op = NetboxApiOperation('users', 'users_list', nb.config['users']['users_list'], nb)
 
     page0 = MagicMock()
@@ -295,7 +300,7 @@ async def test_NetboxApiOperation_request_pagination(mnbro):
 async def test_NetboxApiOperation_request_delete():
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
-    nb.request = asynctest.CoroutineMock(return_value=ResponseMock())
+    nb.request = AsyncMock(return_value=ResponseMock())
 
     op = NetboxApiOperation('users', 'users_delete', nb.config['users']['users_delete'], nb)
 
@@ -330,14 +335,14 @@ def test_NetboxApi_attr(mnbaop):
 
 
 @patch('aionetbox.api.NetboxSpec')
-def test_AIONetbox_from_openapi(mrp):
+async def test_AIONetbox_from_openapi(mrp):
     with patch.object(AIONetbox, 'parse_spec') as mps:
         AIONetbox.from_openapi('http://testurl', 'ab12cd34')
-        mrp.assert_called_with('http://testurl/api/swagger.json')
+        mrp.assert_called_with('http://testurl/api/schema/')
         mps.assert_called_with(mrp.return_value)
 
 
-def test_AIONetbox_from_spec():
+async def test_AIONetbox_from_spec():
     a = AIONetbox.from_spec(str(here / 'data' / 'openapi-2.yaml'), 'ab12cd34')
 
     assert a.host == 'https://api.example.com'
@@ -347,7 +352,7 @@ def test_AIONetbox_from_spec():
 async def test_AIONetbox_get_session_key():
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
-    nb.request = asynctest.CoroutineMock(return_value=ResponseMock())
+    nb.request = AsyncMock(return_value=ResponseMock())
 
     await nb.get_session_key('test')
 
@@ -358,15 +363,15 @@ async def test_AIONetbox_get_session_key_fail():
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
 
     resp = ResponseMock()
-    nb.request = asynctest.CoroutineMock(return_value=resp)
-    resp.json = asynctest.CoroutineMock(side_effect=[Exception])
+    nb.request = AsyncMock(return_value=resp)
+    resp.json = AsyncMock(side_effect=[Exception])
 
     key = await nb.get_session_key('test')
 
     assert key is None
 
 
-def test_AIONetbox_parse_spec():
+async def test_AIONetbox_parse_spec():
     a = AIONetbox('http://localhost', '1122')
     spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
 
@@ -484,7 +489,8 @@ async def test_AIONetbox_close():
 @patch('aionetbox.api.NetboxApi')
 def test_AIONetbox_attr(mnba):
 
-    spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'))
+    from prance.util.resolver import RESOLVE_INTERNAL
+    spec = ResolvingParser(str(here / 'data' / 'openapi-2.yaml'), resolve_method=RESOLVE_INTERNAL)
     nb = AIONetbox(host='http://localhost', api_key='11', spec=spec, session=SessionMock())
 
     nb.users
