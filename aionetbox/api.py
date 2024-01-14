@@ -281,9 +281,8 @@ class NetboxApiOperation:
         self.config = config
         self.rest_config = self.config.get('rest', {})
         self.operation = operation
-        self.http_method = self.rest_config['method']
+        self.http_method = self.rest_config.get('method')
         self.tag = tag
-        print('config',config)
 
     async def _request(self, path, query, body):
         url = self.build_url(self.rest_config.get('url')).format(**path)
