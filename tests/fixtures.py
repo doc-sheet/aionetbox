@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock
+from requests import Response
 
-
-class ResponseMock():
+class ResponseMock(Response):
 
     json = AsyncMock(return_value={})
     raise_for_status = AsyncMock()
